@@ -16,8 +16,6 @@
  */
 package com.jayway.maven.plugins.android.standalonemojos;
 
-import static com.android.ddmlib.testrunner.ITestRunListener.TestFailure.ERROR;
-
 import java.io.File;
 import java.io.FileWriter;
 import java.io.IOException;
@@ -25,7 +23,6 @@ import java.text.DecimalFormat;
 import java.text.NumberFormat;
 import java.util.Date;
 import java.util.Map;
-import java.util.Map.Entry;
 
 import javax.xml.parsers.DocumentBuilder;
 import javax.xml.parsers.DocumentBuilderFactory;
@@ -486,6 +483,7 @@ public class UIAutomatorMojo extends AbstractAndroidMojo
         private static final String TAG_TESTSUITE = "testsuite";
         private static final String ATTR_TESTSUITE_ERRORS = "errors";
         private static final String ATTR_TESTSUITE_FAILURES = "failures";
+        private static final String ATTR_TESTSUITE_IGNORED = "ignored";
         private static final String ATTR_TESTSUITE_HOSTNAME = "hostname";
         private static final String ATTR_TESTSUITE_NAME = "name";
         private static final String ATTR_TESTSUITE_TESTS = "tests";
@@ -514,6 +512,7 @@ public class UIAutomatorMojo extends AbstractAndroidMojo
 
         private int testCount = 0;
         private int testRunCount = 0;
+        private int testIgnoredCount = 0;
         private int testFailureCount = 0;
         private int testErrorCount = 0;
         private String testRunFailureCause = null;
@@ -631,6 +630,15 @@ public class UIAutomatorMojo extends AbstractAndroidMojo
         }
 
         @Override
+        public void testIgnored( TestIdentifier testIdentifier )
+        {
+            ++testIgnoredCount;
+
+            getLog().info( deviceLogLinePrefix + INDENT + INDENT + testIdentifier.toString() );
+
+        }
+
+        @Override
         public void testStarted( TestIdentifier testIdentifier )
         {
             testRunCount++;
@@ -654,42 +662,66 @@ public class UIAutomatorMojo extends AbstractAndroidMojo
         }
 
         @Override
-        public void testFailed( TestFailure status, TestIdentifier testIdentifier, String trace )
+        public void testFailed( TestIdentifier testIdentifier, String trace )
         {
             if ( parsedTakeScreenshotOnFailure )
             {
-                String suffix = status == ERROR ? "_error" : "_failure";
+                String suffix = "_error";
                 String filepath = testIdentifier.getTestName() + suffix + SCREENSHOT_SUFFIX;
 
                 executeOnAdbShell( "screencap -p " + parsedScreenshotsPathOnDevice + "/" + filepath );
                 getLog().info( deviceLogLinePrefix + INDENT + INDENT + filepath + " saved." );
             }
 
-            if ( status == ERROR )
-            {
-                ++testErrorCount;
-            }
-            else
-            {
-                ++testFailureCount;
-            }
-            getLog().info( deviceLogLinePrefix + INDENT + INDENT + status.name() + ":" + testIdentifier.toString() );
+            ++testErrorCount;
+
+            getLog().info( deviceLogLinePrefix + INDENT + INDENT + testIdentifier.toString() );
             getLog().info( deviceLogLinePrefix + INDENT + INDENT + trace );
 
             if ( parsedCreateReport )
             {
                 Node errorFailureNode;
                 NamedNodeMap errorfailureAttributes;
-                if ( status == ERROR )
-                {
-                    errorFailureNode = junitReport.createElement( TAG_ERROR );
-                    errorfailureAttributes = errorFailureNode.getAttributes();
-                }
-                else
-                {
-                    errorFailureNode = junitReport.createElement( TAG_FAILURE );
-                    errorfailureAttributes = errorFailureNode.getAttributes();
-                }
+
+                errorFailureNode = junitReport.createElement( TAG_ERROR );
+                errorfailureAttributes = errorFailureNode.getAttributes();
+
+                errorFailureNode.setTextContent( trace );
+                Attr msgAttr = junitReport.createAttribute( ATTR_MESSAGE );
+                msgAttr.setValue( parseForMessage( trace ) );
+                errorfailureAttributes.setNamedItem( msgAttr );
+                Attr typeAttr = junitReport.createAttribute( ATTR_TYPE );
+                typeAttr.setValue( parseForException( trace ) );
+                errorfailureAttributes.setNamedItem( typeAttr );
+                currentTestCaseNode.appendChild( errorFailureNode );
+            }
+        }
+
+        @Override
+        public void testAssumptionFailure( TestIdentifier testIdentifier, String trace )
+        {
+            if ( parsedTakeScreenshotOnFailure )
+            {
+                String suffix = "_failure";
+                String filepath = testIdentifier.getTestName() + suffix + SCREENSHOT_SUFFIX;
+
+                executeOnAdbShell( "screencap -p " + parsedScreenshotsPathOnDevice + "/" + filepath );
+                getLog().info( deviceLogLinePrefix + INDENT + INDENT + filepath + " saved." );
+            }
+
+            ++testFailureCount;
+
+            getLog().info( deviceLogLinePrefix + INDENT + INDENT + testIdentifier.toString() );
+            getLog().info( deviceLogLinePrefix + INDENT + INDENT + trace );
+
+            if ( parsedCreateReport )
+            {
+                Node errorFailureNode;
+                NamedNodeMap errorfailureAttributes;
+
+                errorFailureNode = junitReport.createElement( TAG_FAILURE );
+                errorfailureAttributes = errorFailureNode.getAttributes();
+
                 errorFailureNode.setTextContent( trace );
                 Attr msgAttr = junitReport.createAttribute( ATTR_MESSAGE );
                 msgAttr.setValue( parseForMessage( trace ) );
@@ -774,7 +806,8 @@ public class UIAutomatorMojo extends AbstractAndroidMojo
             getLog().info(
                     INDENT + "Tests run: " + testRunCount
                             + ( testRunCount < testCount ? " (of " + testCount + ")" : "" ) + ",  Failures: "
-                            + testFailureCount + ",  Errors: " + testErrorCount );
+                            + testFailureCount + ",  Errors: " + testErrorCount
+                            + ",  Ignored: " + testIgnoredCount );
 
             if ( parsedCreateReport )
             {
@@ -788,6 +821,9 @@ public class UIAutomatorMojo extends AbstractAndroidMojo
                 Attr testErrorsAttr = junitReport.createAttribute( ATTR_TESTSUITE_ERRORS );
                 testErrorsAttr.setValue( Integer.toString( testErrorCount ) );
                 testSuiteAttributes.setNamedItem( testErrorsAttr );
+                Attr testIgnoredAttr = junitReport.createAttribute( ATTR_TESTSUITE_IGNORED );
+                testIgnoredAttr.setValue( Integer.toString( testIgnoredCount ) );
+                testSuiteAttributes.setNamedItem( testIgnoredAttr );
                 Attr timeAttr = junitReport.createAttribute( ATTR_TESTSUITE_TIME );
                 timeAttr.setValue( timeFormatter.format( elapsedTime / 1000.0 ) );
                 testSuiteAttributes.setNamedItem( timeAttr );

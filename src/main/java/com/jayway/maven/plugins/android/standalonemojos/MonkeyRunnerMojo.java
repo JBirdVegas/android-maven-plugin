@@ -22,7 +22,6 @@ import com.android.ddmlib.IShellOutputReceiver;
 import com.android.ddmlib.ShellCommandUnresponsiveException;
 import com.android.ddmlib.TimeoutException;
 import com.android.ddmlib.testrunner.ITestRunListener;
-import com.android.ddmlib.testrunner.ITestRunListener.TestFailure;
 import com.android.ddmlib.testrunner.TestIdentifier;
 import com.jayway.maven.plugins.android.AbstractAndroidMojo;
 import com.jayway.maven.plugins.android.CommandExecutor;
@@ -72,8 +71,6 @@ import java.util.List;
 import java.util.Map;
 import java.util.regex.Matcher;
 import java.util.regex.Pattern;
-
-import static com.android.ddmlib.testrunner.ITestRunListener.TestFailure.ERROR;
 
 /**
  * Can execute monkey runner programs.<br/>
@@ -440,7 +437,7 @@ public class MonkeyRunnerMojo extends AbstractAndroidMojo
 
         for ( ITestRunListener listener : mTestListeners )
         {
-            listener.testFailed( TestFailure.ERROR, mCurrentTestIndentifier, trace );
+            listener.testFailed( mCurrentTestIndentifier, trace );
         }
         mCurrentTestIndentifier = null;
 
@@ -528,6 +525,7 @@ public class MonkeyRunnerMojo extends AbstractAndroidMojo
         private static final String TAG_TESTSUITE = "testsuite";
         private static final String ATTR_TESTSUITE_ERRORS = "errors";
         private static final String ATTR_TESTSUITE_FAILURES = "failures";
+        private static final String ATTR_TESTSUITE_IGNORED = "ignored";
         private static final String ATTR_TESTSUITE_HOSTNAME = "hostname";
         private static final String ATTR_TESTSUITE_NAME = "name";
         private static final String ATTR_TESTSUITE_TESTS = "tests";
@@ -556,6 +554,7 @@ public class MonkeyRunnerMojo extends AbstractAndroidMojo
 
         private int testCount = 0;
         private int testRunCount = 0;
+        private int testIgnoredCount = 0;
         private int testFailureCount = 0;
         private int testErrorCount = 0;
         private String testRunFailureCause = null;
@@ -691,33 +690,57 @@ public class MonkeyRunnerMojo extends AbstractAndroidMojo
         }
 
         @Override
-        public void testFailed( TestFailure status, TestIdentifier testIdentifier, String trace )
+        public void testIgnored( TestIdentifier testIdentifier )
         {
-            if ( status == ERROR )
-            {
-                ++testErrorCount;
-            }
-            else
-            {
-                ++testFailureCount;
-            }
-            getLog().info( deviceLogLinePrefix + INDENT + INDENT + status.name() + ":" + testIdentifier.toString() );
+            ++testIgnoredCount;
+
+            getLog().info( deviceLogLinePrefix + INDENT + INDENT + testIdentifier.toString() );
+        }
+
+        @Override
+        public void testFailed( TestIdentifier testIdentifier, String trace )
+        {
+            ++testErrorCount;
+
+            getLog().info( deviceLogLinePrefix + INDENT + INDENT + testIdentifier.toString() );
             getLog().info( deviceLogLinePrefix + INDENT + INDENT + trace );
 
             if ( parsedCreateReport )
             {
                 Node errorFailureNode;
                 NamedNodeMap errorfailureAttributes;
-                if ( status == ERROR )
-                {
-                    errorFailureNode = junitReport.createElement( TAG_ERROR );
-                    errorfailureAttributes = errorFailureNode.getAttributes();
-                }
-                else
-                {
-                    errorFailureNode = junitReport.createElement( TAG_FAILURE );
-                    errorfailureAttributes = errorFailureNode.getAttributes();
-                }
+
+                errorFailureNode = junitReport.createElement( TAG_ERROR );
+                errorfailureAttributes = errorFailureNode.getAttributes();
+
+                errorFailureNode.setTextContent( trace );
+                Attr msgAttr = junitReport.createAttribute( ATTR_MESSAGE );
+                msgAttr.setValue( parseForMessage( trace ) );
+                errorfailureAttributes.setNamedItem( msgAttr );
+                Attr typeAttr = junitReport.createAttribute( ATTR_TYPE );
+                typeAttr.setValue( parseForException( trace ) );
+                errorfailureAttributes.setNamedItem( typeAttr );
+                currentTestCaseNode.appendChild( errorFailureNode );
+            }
+        }
+
+        @Override
+        public void testAssumptionFailure( TestIdentifier testIdentifier, String trace )
+        {
+
+            ++testFailureCount;
+
+            getLog().info( deviceLogLinePrefix + INDENT + INDENT + testIdentifier.toString() );
+            getLog().info( deviceLogLinePrefix + INDENT + INDENT + trace );
+
+            if ( parsedCreateReport )
+            {
+                Node errorFailureNode;
+                NamedNodeMap errorfailureAttributes;
+
+                errorFailureNode = junitReport.createElement( TAG_FAILURE );
+                errorfailureAttributes = errorFailureNode.getAttributes();
+
                 errorFailureNode.setTextContent( trace );
                 Attr msgAttr = junitReport.createAttribute( ATTR_MESSAGE );
                 msgAttr.setValue( parseForMessage( trace ) );
@@ -802,7 +825,8 @@ public class MonkeyRunnerMojo extends AbstractAndroidMojo
             getLog().info(
                     INDENT + "Tests run: " + testRunCount
                             + ( testRunCount < testCount ? " (of " + testCount + ")" : "" ) + ",  Failures: "
-                            + testFailureCount + ",  Errors: " + testErrorCount );
+                            + testFailureCount + ",  Errors: " + testErrorCount
+                            + ",  Ignored: " + testIgnoredCount );
 
             if ( parsedCreateReport )
             {
@@ -816,6 +840,9 @@ public class MonkeyRunnerMojo extends AbstractAndroidMojo
                 Attr testErrorsAttr = junitReport.createAttribute( ATTR_TESTSUITE_ERRORS );
                 testErrorsAttr.setValue( Integer.toString( testErrorCount ) );
                 testSuiteAttributes.setNamedItem( testErrorsAttr );
+                Attr testIgnoredAttr = junitReport.createAttribute( ATTR_TESTSUITE_IGNORED );
+                testIgnoredAttr.setValue( Integer.toString( testIgnoredCount ) );
+                testSuiteAttributes.setNamedItem( testIgnoredAttr );
                 Attr timeAttr = junitReport.createAttribute( ATTR_TESTSUITE_TIME );
                 timeAttr.setValue( timeFormatter.format( elapsedTime / 1000.0 ) );
                 testSuiteAttributes.setNamedItem( timeAttr );
